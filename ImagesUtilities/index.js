@@ -1,96 +1,61 @@
-(function (s) {
-    "use strict";
+import { registerCommand } from "@vendetta/commands";
+import { before, unpatchAll } from "@vendetta/patcher";
+import { getModule } from "@vendetta/metro";
 
-    const { metro, React } = vendetta;
-    const { findByProps, findByDisplayName } = metro;
+// Store deleted or unavailable messages
+const deletedMessages = [];
 
-    // React Native components
-    const { View, Text } = findByDisplayName("ReactNative");
-    const { after } = metro.patcher;
-    const ImageZoomView = findByProps("ImageZoomView");
+export default {
+    onLoad: () => {
+        // Intercept message deletions
+        const messageModule = getModule(m => m.deleteMessage);
+        before("deleteMessage", messageModule, (args) => {
+            const [channelId, messageId] = args;
 
-    // Utility function to format file size
-    function formatSize(bytes) {
-        return bytes < 1024
-            ? `${bytes} bytes`
-            : bytes < 1024 * 1024
-            ? `${(bytes / 1024).toFixed(2)} KB`
-            : `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
-    }
+            // Retrieve the message details (mock example for simplicity)
+            const messageStore = getModule(m => m.getMessage);
+            const message = messageStore.getMessage(channelId, messageId);
 
-    // Component to overlay media info
-    function MediaInfoOverlay({ source, size, type }) {
-        return React.createElement(
-            View,
-            {
-                style: {
-                    position: "absolute",
-                    bottom: 10,
-                    left: 10,
-                    backgroundColor: "rgba(0, 0, 0, 0.6)",
-                    padding: 10,
-                    borderRadius: 8,
-                    maxWidth: "90%",
-                },
-            },
-            React.createElement(
-                Text,
-                {
-                    style: {
-                        color: "white",
-                        fontSize: 12,
-                    },
-                },
-                `Source: ${source}\nSize: ${size}\nType: ${type}`
-            )
-        );
-    }
+            if (message) {
+                deletedMessages.unshift({
+                    content: message.content || "[Message Content Unavailable]",
+                    author: message.author.username || "Unknown",
+                    timestamp: new Date().toISOString()
+                });
 
-    // Plugin definition
-    const p = {
-        onLoad: function () {
-            // Patch the image zoom view to add the overlay when displaying media
-            after("render", ImageZoomView, (args, res) => {
-                const mediaProps = args[0].imageProps || {};
+                // Limit the log to the last 10 messages
+                if (deletedMessages.length > 10) deletedMessages.pop();
+            }
+        });
 
-                if (mediaProps?.source?.uri) {
-                    const uri = mediaProps.source.uri;
-
-                    // Fetch the media details and add the overlay
-                    fetch(uri).then(response => {
-                        const size = formatSize(parseInt(response.headers.get("content-length"), 10));
-                        const type = response.headers.get("content-type");
-
-                        // Inject the overlay into the image/video view
-                        res.props.children.push(
-                            React.createElement(MediaInfoOverlay, {
-                                source: uri,
-                                size,
-                                type,
-                            })
-                        );
-                    }).catch(() => {
-                        // If fetching fails, still show an overlay with partial info
-                        res.props.children.push(
-                            React.createElement(MediaInfoOverlay, {
-                                source: uri,
-                                size: "Unknown",
-                                type: "Unknown",
-                            })
-                        );
+        // Register the /snipe command
+        registerCommand({
+            name: "snipe",
+            description: "Retrieve the last deleted message.",
+            applicationId: "-1",
+            inputType: 1,
+            type: 1,
+            execute: async (args, { send }) => {
+                if (deletedMessages.length === 0) {
+                    send({
+                        content: "No deleted messages found!",
+                        username: "Clyde",
+                        avatar: "https://cdn.discordapp.com/embed/avatars/0.png"
                     });
+                    return;
                 }
 
-                return res;
-            });
-        },
-
-        onUnload: function () {
-            // Remove any patches when the plugin is unloaded
-            metro.patcher.unpatchAll();
-        }
-    };
-
-    return s.default = p, Object.defineProperty(s, "__esModule", { value: !0 }), s;
-
-})({});
+                const lastMessage = deletedMessages.shift(); // Get the most recent deleted message
+                send({
+                    content: `**${lastMessage.author}**: ${lastMessage.content}`,
+                    username: "Clyde",
+                    avatar: "https://cdn.discordapp.com/embed/avatars/0.png"
+                });
+            }
+        });
+    },
+    onUnload: () => {
+        // Clean up hooks and commands
+        unpatchAll();
+    }
+};
